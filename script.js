@@ -42,12 +42,13 @@
   // Decorative chapter UI begins after the hero and is hidden below desktop/tablet widths.
   const chapterDefinitions = [
     { selector: "#about", index: "01", label: "About" },
-    { selector: "#journey", index: "02", label: "Journey" },
-    { selector: "#expertise", index: "03", label: "Expertise" },
-    { selector: "#work", index: "04", label: "Projects" },
-    { selector: ".testimonials", index: "05", label: "Testimonials" },
-    { selector: ".process", index: "06", label: "Process" },
-    { selector: "#contact", index: "07", label: "Contact" }
+    { selector: "#systems", index: "02", label: "Systems" },
+    { selector: "#journey", index: "03", label: "Journey" },
+    { selector: "#expertise", index: "04", label: "Expertise" },
+    { selector: "#work", index: "05", label: "Projects" },
+    { selector: ".testimonials", index: "06", label: "Testimonials" },
+    { selector: ".process", index: "07", label: "Process" },
+    { selector: "#contact", index: "08", label: "Contact" }
   ];
   const chapterSections = chapterDefinitions.map(chapter => ({ ...chapter, element: document.querySelector(chapter.selector) })).filter(chapter => chapter.element);
 
@@ -118,6 +119,65 @@
 
     // Missing or invalid configuration intentionally leaves the styled fallback visible.
     shell.classList.add("media-fallback-only");
+  });
+
+  /* ---------- Lazy system showcase videos ---------- */
+  const systemShowcase = document.querySelector("[data-system-showcase]");
+  const showcaseVideos = [...document.querySelectorAll("[data-showcase-video]")];
+  const horrorVideo = document.querySelector("[data-horror-video]");
+  const horrorAudioButton = document.querySelector("[data-horror-audio]");
+
+  const loadShowcaseVideo = video => {
+    if (video.dataset.loaded === "true") return;
+    video.querySelectorAll("source[data-src]").forEach(source => {
+      source.src = source.dataset.src;
+      source.removeAttribute("data-src");
+      source.addEventListener("error", () => video.closest(".system-proof-media, .horror-frame")?.classList.add("video-failed"), { once: true });
+    });
+    video.dataset.loaded = "true";
+    video.load();
+  };
+
+  showcaseVideos.forEach(video => {
+    video.addEventListener("error", () => video.closest(".system-proof-media, .horror-frame")?.classList.add("video-failed"), { once: true });
+  });
+
+  if ("IntersectionObserver" in window) {
+    const videoObserver = new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        const video = entry.target;
+        const visible = entry.isIntersecting && entry.intersectionRatio >= 0.18;
+        video.dataset.visible = String(visible);
+        if (visible) {
+          loadShowcaseVideo(video);
+          if (!prefersReducedMotion) video.play().catch(() => {});
+        } else video.pause();
+      });
+    }, { threshold: [0, 0.18, 0.45] });
+    showcaseVideos.forEach(video => videoObserver.observe(video));
+  } else {
+    showcaseVideos.forEach(video => loadShowcaseVideo(video));
+  }
+
+  document.addEventListener("visibilitychange", () => {
+    showcaseVideos.forEach(video => {
+      if (document.hidden) video.pause();
+      else if (video.dataset.visible === "true" && !prefersReducedMotion) video.play().catch(() => {});
+    });
+  });
+
+  horrorAudioButton?.addEventListener("click", () => {
+    if (!horrorVideo) return;
+    loadShowcaseVideo(horrorVideo);
+    const enableAudio = horrorVideo.muted;
+    horrorVideo.muted = !enableAudio;
+    horrorVideo.volume = 0.55;
+    horrorAudioButton.classList.toggle("is-audible", enableAudio);
+    horrorAudioButton.setAttribute("aria-pressed", String(enableAudio));
+    horrorAudioButton.setAttribute("aria-label", enableAudio ? "Mute horror UI demo audio" : "Enable horror UI demo audio");
+    const label = horrorAudioButton.querySelector("span");
+    if (label) label.textContent = enableAudio ? "Audio on" : "Audio off";
+    if (enableAudio) horrorVideo.play().catch(() => {});
   });
 
   /* ---------- Mobile navigation ---------- */
@@ -579,6 +639,35 @@
         });
         ScrollTrigger.create({ trigger: block, start: "top 62%", end: "bottom 40%", toggleClass: { targets: block, className: "is-story-active" } });
       });
+
+      // Focused system cards travel on separate depth planes from their captions and code panels.
+      gsap.utils.toArray("[data-system-proof]").forEach((proof, index) => {
+        const media = proof.querySelector(".system-proof-media");
+        const caption = proof.querySelector(".system-proof-caption");
+        const codePanel = proof.querySelector(".system-proof-code");
+        gsap.fromTo(media, { xPercent: index % 2 ? -7 : 7, rotateY: index % 2 ? 3.5 : -3.5, scale: 0.94 }, {
+          xPercent: index % 2 ? 3 : -3,
+          rotateY: 0,
+          scale: 1,
+          ease: "none",
+          scrollTrigger: { trigger: proof, start: "top 92%", end: "bottom 18%", scrub: 1.1 }
+        });
+        gsap.fromTo(caption, { y: 30, opacity: 0.35 }, { y: -8, opacity: 1, ease: "none", scrollTrigger: { trigger: proof, start: "top 82%", end: "center 48%", scrub: 0.75 } });
+        if (codePanel) gsap.to(codePanel, { y: index % 2 ? -95 : 95, rotate: index % 2 ? -1 : 1, ease: "none", scrollTrigger: { trigger: proof, start: "top bottom", end: "bottom top", scrub: 1.35 } });
+      });
+
+      const horrorShowcase = document.querySelector("[data-horror-showcase]");
+      const horrorFrame = horrorShowcase?.querySelector(".horror-frame");
+      if (horrorShowcase && horrorFrame) {
+        gsap.fromTo(horrorFrame, { clipPath: "inset(9% 6% 9% 6% round 28px)", scale: 0.94 }, {
+          clipPath: "inset(0% 0% 0% 0% round 0px)",
+          scale: 1,
+          ease: "none",
+          scrollTrigger: { trigger: horrorShowcase, start: "top 88%", end: "top 18%", scrub: 1 }
+        });
+        gsap.fromTo(horrorFrame.querySelector("video"), { scale: 1.075 }, { scale: 1, ease: "none", scrollTrigger: { trigger: horrorShowcase, start: "top bottom", end: "bottom top", scrub: 1.3 } });
+        gsap.fromTo(horrorFrame.querySelector(".horror-copy"), { y: 45, opacity: 0.2 }, { y: 0, opacity: 1, ease: "none", scrollTrigger: { trigger: horrorShowcase, start: "top 58%", end: "top 18%", scrub: 0.8 } });
+      }
 
       // Journey: milestones slide into focus while the existing orbit remains sticky.
       gsap.utils.toArray(".journey .timeline-item").forEach(item => {
