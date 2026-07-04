@@ -19,8 +19,10 @@
   <meta property="og:site_name" content="Siffy Portfolio">
   <meta property="og:title" content="Siffy | Roblox Developer &amp; Lua Scripter">
   <meta property="og:description" content="Polished Roblox systems, responsive interfaces, and gameplay engineered to keep players engaged.">
- <meta property="og:url" content="https://port-delta-sandy-32.vercel.app/">
- <meta property="og:image" content="https://port-delta-sandy-32.vercel.app/assets/social-preview.png">
+  <meta property="og:url" content="https://port-delta-sandy-32.vercel.app/">
+  <meta property="og:image" content="https://port-delta-sandy-32.vercel.app/assets/social-preview-v2.png">
+  <meta property="og:image:secure_url" content="https://port-delta-sandy-32.vercel.app/assets/social-preview-v2.png">
+  <meta property="og:image:type" content="image/png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
   <meta property="og:image:alt" content="Siffy — Roblox developer portfolio">
@@ -29,7 +31,7 @@
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Siffy | Roblox Developer &amp; Lua Scripter">
   <meta name="twitter:description" content="Polished Roblox systems, responsive interfaces, and gameplay engineered to keep players engaged.">
- <meta name="twitter:image" content="https://port-delta-sandy-32.vercel.app/assets/social-preview.png">
+  <meta name="twitter:image" content="https://port-delta-sandy-32.vercel.app/assets/social-preview-v2.png">
   <meta name="twitter:image:alt" content="Siffy — Roblox developer portfolio">
 
   <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
@@ -38,11 +40,11 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=20260704">
   <!-- GSAP 3.15 + ScrollTrigger power the cinematic scroll choreography. -->
   <script src="https://cdn.jsdelivr.net/npm/gsap@3.15.0/dist/gsap.min.js" defer></script>
   <script src="https://cdn.jsdelivr.net/npm/gsap@3.15.0/dist/ScrollTrigger.min.js" defer></script>
-  <script src="script.js" defer></script>
+  <script src="script.js?v=20260704-2" defer></script>
 </head>
 <body>
   <div class="page-loader" aria-hidden="true">
@@ -56,6 +58,15 @@
   <div class="cursor-dot" aria-hidden="true"></div>
   <canvas class="ambient-canvas" data-ambient-canvas aria-hidden="true"></canvas>
   <div class="noise" aria-hidden="true"></div>
+
+  <!-- Background soundtrack: replace this source to change the portfolio music. -->
+  <audio data-background-music preload="auto" loop>
+    <source src="/assets/background-music.mp3?v=20260704-2" type="audio/mpeg">
+  </audio>
+  <button class="music-toggle is-audible" type="button" data-music-toggle aria-label="Mute background music" aria-pressed="true">
+    <span class="music-toggle-icon" aria-hidden="true"><i></i><i></i><i></i></span>
+    <span data-music-label>Music on</span>
+  </button>
 
   <header class="site-header" data-header>
     <a class="brand" href="#top" aria-label="Siffy — back to top">
@@ -223,12 +234,12 @@
       <article class="horror-showcase" data-horror-showcase>
         <div class="horror-frame">
           <div class="system-video-fallback horror-fallback"><span>03</span><strong>Horror UI</strong><small>Video preview unavailable</small></div>
-          <video autoplay muted loop playsinline preload="none" poster="assets/horror-ui-system-poster.jpg" data-showcase-video data-horror-video aria-label="Horror game interface demonstration">
+          <video autoplay loop playsinline preload="none" poster="assets/horror-ui-system-poster.jpg" data-showcase-video data-horror-video aria-label="Horror game interface demonstration">
             <source data-src="assets/horror-ui-system.mp4" type="video/mp4">
           </video>
           <div class="horror-vignette" aria-hidden="true"></div>
           <div class="horror-copy shell"><span>03 / 03 — Interface system</span><h3>Horror UI</h3><p>Menus, lobby flow, and atmosphere working as one experience.</p></div>
-          <button class="horror-audio" type="button" data-horror-audio aria-label="Enable horror UI demo audio" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 10v4h3l4 3V7l-4 3H5Z"/><path class="audio-wave" d="M15 9c1.4 1.7 1.4 4.3 0 6M18 6c3.2 3.5 3.2 8.5 0 12"/><path class="audio-muted" d="m16 10 5 5M21 10l-5 5"/></svg><span>Audio off</span></button>
+          <button class="horror-audio is-audible" type="button" data-horror-audio aria-label="Mute horror UI demo audio" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 10v4h3l4 3V7l-4 3H5Z"/><path class="audio-wave" d="M15 9c1.4 1.7 1.4 4.3 0 6M18 6c3.2 3.5 3.2 8.5 0 12"/><path class="audio-muted" d="m16 10 5 5M21 10l-5 5"/></svg><span>Audio on</span></button>
           <div class="horror-status"><i></i>LIVE UI CAPTURE</div>
         </div>
       </article>

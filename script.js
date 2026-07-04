@@ -21,9 +21,342 @@
     root.classList.add("gsap-ready");
   }
 
+  /* ---------- Global audio coordinator ---------- */
+  const pageLoader = document.querySelector(".page-loader");
+  const backgroundMusic = document.querySelector("[data-background-music]");
+  const musicToggle = document.querySelector("[data-music-toggle]");
+  const musicLabel = musicToggle?.querySelector("[data-music-label]");
+  const MUSIC_VOLUME = 0.07;
+  // The deployed audio asset is trimmed so its first frame is the detected drop.
+  const MUSIC_DROP_TIME = 0;
+  const activePortfolioMedia = new Set();
+  const youtubePlayers = new Map();
+  let loaderComplete = false;
+  let musicCueApplied = false;
+  let musicPlayPending = false;
+  let musicPlayAttempt = 0;
+  let musicGestureRecoveryUsed = false;
+  let musicAutoplayBlocked = false;
+  let pageHasAudioConsent = false;
+  let backgroundMusicEnabled = true;
+  let musicPrimedBeforeLoader = false;
+  let musicFadeFrame = 0;
+  let musicFadeToken = 0;
+
+  try {
+    const storedEnabled = window.localStorage.getItem("siffy-background-music-enabled");
+    const legacyMuted = window.localStorage.getItem("siffy-background-music-muted");
+    backgroundMusicEnabled = storedEnabled === null ? legacyMuted !== "true" : storedEnabled === "true";
+  } catch (_) {
+    // Storage can be unavailable in strict privacy modes; audio still works for this visit.
+  }
+  if (backgroundMusic) {
+    backgroundMusic.volume = MUSIC_VOLUME;
+    backgroundMusic.muted = !backgroundMusicEnabled;
+    backgroundMusic.loop = true;
+  }
+
+  const logMusicFailure = (context, error) => {
+    const details = {
+      source: backgroundMusic?.currentSrc || backgroundMusic?.querySelector("source")?.src || "unknown",
+      name: error?.name || "MediaError",
+      message: error?.message || "Unknown audio failure",
+      code: backgroundMusic?.error?.code || null
+    };
+    if (error?.name === "NotAllowedError") console.warn(`[Siffy audio] ${context}: browser interaction required.`, details);
+    else console.error(`[Siffy audio] ${context}.`, details);
+  };
+
+  backgroundMusic?.addEventListener("error", () => logMusicFailure("Background music failed to load", backgroundMusic.error));
+  backgroundMusic?.querySelector("source")?.addEventListener("error", event => logMusicFailure("Background music source failed to load", event));
+
+  const saveMusicPreference = () => {
+    try {
+      window.localStorage.setItem("siffy-background-music-enabled", String(backgroundMusicEnabled));
+      window.localStorage.removeItem("siffy-background-music-muted");
+    } catch (_) {
+      // Preference persistence is optional when storage is blocked.
+    }
+  };
+
+  const updateMusicControl = () => {
+    if (!musicToggle) return;
+    const pausedForMedia = backgroundMusicEnabled && activePortfolioMedia.size > 0;
+    const waitingForGesture = backgroundMusicEnabled && musicAutoplayBlocked && !pausedForMedia;
+    const label = !backgroundMusicEnabled ? "Music off" : pausedForMedia ? "Music paused" : waitingForGesture ? "Play music" : "Music on";
+    musicToggle.classList.toggle("is-audible", backgroundMusicEnabled);
+    musicToggle.classList.toggle("is-paused", pausedForMedia);
+    musicToggle.classList.toggle("needs-gesture", waitingForGesture);
+    musicToggle.setAttribute("aria-pressed", String(backgroundMusicEnabled));
+    musicToggle.setAttribute("aria-label", !backgroundMusicEnabled ? "Enable background music" : waitingForGesture ? "Play background music" : "Mute background music");
+    if (musicLabel) musicLabel.textContent = label;
+  };
+
+  const cueMusicToDrop = () => {
+    if (!backgroundMusic) return false;
+    if (musicCueApplied) return true;
+    if (backgroundMusic.readyState < 1) return false;
+    try {
+      backgroundMusic.currentTime = MUSIC_DROP_TIME;
+      musicCueApplied = true;
+      return true;
+    } catch (_) {
+      return false;
+    }
+  };
+
+  const cancelMusicFade = () => {
+    musicFadeToken += 1;
+    if (musicFadeFrame) window.cancelAnimationFrame(musicFadeFrame);
+    musicFadeFrame = 0;
+  };
+
+  const fadeMusicTo = (targetVolume, duration, onComplete) => {
+    if (!backgroundMusic) return;
+    cancelMusicFade();
+    const token = musicFadeToken;
+    const startVolume = backgroundMusic.volume;
+    const startedAt = window.performance.now();
+    const fadeDuration = prefersReducedMotion ? 0 : duration;
+
+    if (fadeDuration === 0 || Math.abs(startVolume - targetVolume) < 0.001) {
+      backgroundMusic.volume = targetVolume;
+      onComplete?.();
+      return;
+    }
+
+    const step = now => {
+      if (token !== musicFadeToken) return;
+      const progress = Math.min((now - startedAt) / fadeDuration, 1);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      backgroundMusic.volume = startVolume + (targetVolume - startVolume) * eased;
+      if (progress < 1) musicFadeFrame = window.requestAnimationFrame(step);
+      else {
+        musicFadeFrame = 0;
+        onComplete?.();
+      }
+    };
+    musicFadeFrame = window.requestAnimationFrame(step);
+  };
+
+  const pauseBackgroundMusicSmoothly = () => {
+    updateMusicControl();
+    if (!backgroundMusic || backgroundMusic.paused) {
+      if (backgroundMusic) backgroundMusic.volume = 0;
+      updateMusicControl();
+      return;
+    }
+
+    fadeMusicTo(0, 320, () => {
+      if (!shouldPlayBackgroundMusic()) {
+        backgroundMusic.pause();
+        backgroundMusic.muted = !backgroundMusicEnabled;
+      }
+      updateMusicControl();
+    });
+  };
+
+  const shouldPlayBackgroundMusic = () => Boolean(
+    backgroundMusic &&
+    loaderComplete &&
+    backgroundMusicEnabled &&
+    activePortfolioMedia.size === 0 &&
+    !document.hidden
+  );
+
+  const reconcileBackgroundMusic = (forcePlay = false) => {
+    if (!backgroundMusic) return;
+
+    if (!shouldPlayBackgroundMusic()) {
+      pauseBackgroundMusicSmoothly();
+      return;
+    }
+
+    if (!cueMusicToDrop() || (musicPlayPending && !forcePlay)) {
+      updateMusicControl();
+      return;
+    }
+
+    if (!backgroundMusic.paused) {
+      musicAutoplayBlocked = false;
+      backgroundMusic.muted = false;
+      fadeMusicTo(MUSIC_VOLUME, 500);
+      updateMusicControl();
+      return;
+    }
+
+    cancelMusicFade();
+    const attempt = ++musicPlayAttempt;
+    backgroundMusic.muted = false;
+    backgroundMusic.volume = 0;
+    const playback = backgroundMusic.play();
+    if (!playback) {
+      window.setTimeout(() => {
+        musicAutoplayBlocked = backgroundMusic.paused;
+        if (!backgroundMusic.paused) fadeMusicTo(MUSIC_VOLUME, 500);
+        updateMusicControl();
+      }, 0);
+      return;
+    }
+
+    musicPlayPending = true;
+    musicAutoplayBlocked = true;
+    updateMusicControl();
+    playback.then(() => {
+      if (attempt !== musicPlayAttempt) return;
+      musicAutoplayBlocked = false;
+      fadeMusicTo(MUSIC_VOLUME, 500);
+    }).catch(error => {
+      if (attempt !== musicPlayAttempt) return;
+      musicAutoplayBlocked = true;
+      backgroundMusic.pause();
+      logMusicFailure("Background music could not play", error);
+    }).finally(() => {
+      if (attempt !== musicPlayAttempt) return;
+      musicPlayPending = false;
+      updateMusicControl();
+    });
+  };
+
+  const primeBackgroundMusicFromGesture = () => {
+    if (!backgroundMusic || !backgroundMusicEnabled || activePortfolioMedia.size > 0 || document.hidden) return;
+    if (loaderComplete) {
+      reconcileBackgroundMusic(true);
+      return;
+    }
+
+    cueMusicToDrop();
+    backgroundMusic.muted = false;
+    backgroundMusic.volume = 0;
+    const attempt = ++musicPlayAttempt;
+    const playback = backgroundMusic.play();
+    if (!playback) {
+      musicPrimedBeforeLoader = !backgroundMusic.paused;
+      return;
+    }
+
+    musicPlayPending = true;
+    playback.then(() => {
+      if (attempt !== musicPlayAttempt) return;
+      musicPrimedBeforeLoader = true;
+      musicAutoplayBlocked = false;
+    }).catch(error => {
+      if (attempt !== musicPlayAttempt) return;
+      musicAutoplayBlocked = true;
+      logMusicFailure("Background music could not be primed", error);
+    }).finally(() => {
+      if (attempt !== musicPlayAttempt) return;
+      musicPlayPending = false;
+      updateMusicControl();
+    });
+  };
+
+  const setPortfolioMediaActive = (media, active) => {
+    if (active) activePortfolioMedia.add(media);
+    else activePortfolioMedia.delete(media);
+    reconcileBackgroundMusic();
+  };
+
+  const registerNativePortfolioVideo = video => {
+    video.addEventListener("play", () => setPortfolioMediaActive(video, true));
+    video.addEventListener("playing", () => setPortfolioMediaActive(video, true));
+    ["pause", "ended", "emptied", "error"].forEach(eventName => {
+      video.addEventListener(eventName, () => setPortfolioMediaActive(video, false));
+    });
+  };
+
+  const subscribeToYoutubePlayer = frame => {
+    if (!frame.contentWindow) return;
+    frame.contentWindow.postMessage(JSON.stringify({ event: "listening", id: frame.dataset.youtubePlayerId }), "*");
+    frame.contentWindow.postMessage(JSON.stringify({ event: "command", func: "addEventListener", args: ["onStateChange"] }), "*");
+  };
+
+  window.addEventListener("message", event => {
+    if (!/https:\/\/(www\.)?youtube(?:-nocookie)?\.com$/.test(event.origin)) return;
+    const frame = [...youtubePlayers.keys()].find(playerFrame => playerFrame.contentWindow === event.source);
+    if (!frame) return;
+
+    let message = event.data;
+    if (typeof message === "string") {
+      try { message = JSON.parse(message); } catch (_) { return; }
+    }
+
+    const state = message?.event === "onStateChange" ? Number(message.info) : Number(message?.info?.playerState);
+    if (!Number.isFinite(state)) return;
+    youtubePlayers.set(frame, state);
+    setPortfolioMediaActive(frame, state === 1 || state === 3);
+  });
+
+  const signalAudioGesture = event => {
+    pageHasAudioConsent = true;
+    if (event?.target?.closest?.("[data-music-toggle], [data-horror-audio]")) return;
+    document.dispatchEvent(new CustomEvent("siffy:audio-gesture"));
+    if (backgroundMusic?.paused || musicAutoplayBlocked) primeBackgroundMusicFromGesture();
+  };
+  document.addEventListener("pointerdown", signalAudioGesture, { passive: true });
+  document.addEventListener("keydown", signalAudioGesture);
+
+  backgroundMusic?.addEventListener("loadedmetadata", () => {
+    cueMusicToDrop();
+    reconcileBackgroundMusic();
+  }, { once: true });
+
+  musicToggle?.addEventListener("click", () => {
+    pageHasAudioConsent = true;
+
+    // When autoplay was blocked, the first click starts music instead of
+    // misleadingly toggling an already-silent "on" state off.
+    if (backgroundMusicEnabled && (musicAutoplayBlocked || backgroundMusic?.paused) && activePortfolioMedia.size === 0 && !musicGestureRecoveryUsed) {
+      musicGestureRecoveryUsed = true;
+      musicAutoplayBlocked = false;
+      musicPlayPending = false;
+      primeBackgroundMusicFromGesture();
+      return;
+    }
+
+    backgroundMusicEnabled = !backgroundMusicEnabled;
+    musicGestureRecoveryUsed = false;
+    musicAutoplayBlocked = false;
+    if (backgroundMusicEnabled && backgroundMusic) backgroundMusic.muted = false;
+    saveMusicPreference();
+    if (backgroundMusicEnabled) primeBackgroundMusicFromGesture();
+    else reconcileBackgroundMusic();
+  });
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      cancelMusicFade();
+      backgroundMusic?.pause();
+      if (backgroundMusic) backgroundMusic.volume = 0;
+    }
+    else window.setTimeout(reconcileBackgroundMusic, 0);
+  });
+
+  updateMusicControl();
+
   /* ---------- Basic page setup ---------- */
   window.addEventListener("load", () => {
-    window.setTimeout(() => document.querySelector(".page-loader")?.classList.add("loaded"), 250);
+    window.setTimeout(() => {
+      pageLoader?.classList.add("loaded");
+
+      let loaderSignalSent = false;
+      const finishLoader = () => {
+        if (loaderSignalSent) return;
+        loaderSignalSent = true;
+        loaderComplete = true;
+        if (musicPrimedBeforeLoader && backgroundMusic && !backgroundMusic.paused) {
+          backgroundMusic.currentTime = MUSIC_DROP_TIME;
+          musicPrimedBeforeLoader = false;
+        }
+        cueMusicToDrop();
+        reconcileBackgroundMusic();
+      };
+
+      pageLoader?.addEventListener("transitionend", event => {
+        if (event.target === pageLoader && event.propertyName === "transform") finishLoader();
+      }, { once: true });
+      window.setTimeout(finishLoader, 1200);
+    }, 250);
     if (hasGsap) window.ScrollTrigger.refresh();
   });
 
@@ -89,13 +422,18 @@
     if (mediaType === "youtube" && youtubeIdPattern.test(youtubeId)) {
       const frame = document.createElement("iframe");
       frame.className = "project-media-asset project-media-video";
-      frame.src = `https://www.youtube-nocookie.com/embed/${youtubeId}?rel=0&modestbranding=1&playsinline=1`;
+      frame.dataset.youtubePlayerId = `siffy-youtube-${youtubePlayers.size + 1}`;
+      frame.src = `https://www.youtube-nocookie.com/embed/${youtubeId}?rel=0&modestbranding=1&playsinline=1&enablejsapi=1&origin=${encodeURIComponent(window.location.origin)}`;
       frame.title = `${title} video preview`;
       frame.loading = "lazy";
       frame.referrerPolicy = "strict-origin-when-cross-origin";
       frame.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share";
       frame.allowFullscreen = true;
-      frame.addEventListener("load", () => shell.classList.add("media-loaded"), { once: true });
+      youtubePlayers.set(frame, -1);
+      frame.addEventListener("load", () => {
+        shell.classList.add("media-loaded");
+        subscribeToYoutubePlayer(frame);
+      }, { once: true });
       stage.appendChild(frame);
       return;
     }
@@ -124,8 +462,43 @@
   /* ---------- Lazy system showcase videos ---------- */
   const systemShowcase = document.querySelector("[data-system-showcase]");
   const showcaseVideos = [...document.querySelectorAll("[data-showcase-video]")];
+  showcaseVideos.forEach(registerNativePortfolioVideo);
   const horrorVideo = document.querySelector("[data-horror-video]");
   const horrorAudioButton = document.querySelector("[data-horror-audio]");
+  const horrorShowcase = document.querySelector("[data-horror-showcase]");
+  const HORROR_MAX_VOLUME = 0.55;
+  let horrorAudioEnabled = true;
+  let horrorAudioNeedsUnlock = true;
+
+  const clamp01 = value => Math.min(1, Math.max(0, value));
+
+  // A direction-independent envelope: quiet while entering/leaving, full level
+  // through the center of the pinned scene. The same math works scrolling upward.
+  const getHorrorScrollVolume = () => {
+    if (!horrorShowcase) return 0;
+    const rect = horrorShowcase.getBoundingClientRect();
+    const viewportHeight = Math.max(window.innerHeight, 1);
+    const fadeDistance = viewportHeight * 0.72;
+    const fadeIn = clamp01((viewportHeight - rect.top) / fadeDistance);
+    const fadeOut = clamp01(rect.bottom / fadeDistance);
+    return Math.min(fadeIn, fadeOut) * HORROR_MAX_VOLUME;
+  };
+
+  const syncHorrorAudioVolume = () => {
+    if (!horrorVideo) return;
+    const isVisible = horrorVideo.dataset.visible === "true";
+    const volume = horrorAudioEnabled && isVisible ? getHorrorScrollVolume() : 0;
+    horrorVideo.volume = volume;
+    horrorAudioButton?.style.setProperty("--audio-level", volume / HORROR_MAX_VOLUME);
+  };
+
+  const updateHorrorAudioButton = () => {
+    horrorAudioButton?.classList.toggle("is-audible", horrorAudioEnabled);
+    horrorAudioButton?.setAttribute("aria-pressed", String(horrorAudioEnabled));
+    horrorAudioButton?.setAttribute("aria-label", horrorAudioEnabled ? "Mute horror UI demo audio" : "Enable horror UI demo audio");
+    const label = horrorAudioButton?.querySelector("span");
+    if (label) label.textContent = horrorAudioEnabled ? "Audio on" : "Audio off";
+  };
 
   const loadShowcaseVideo = video => {
     if (video.dataset.loaded === "true") return;
@@ -142,43 +515,112 @@
     video.addEventListener("error", () => video.closest(".system-proof-media, .horror-frame")?.classList.add("video-failed"), { once: true });
   });
 
+  if (horrorVideo) {
+    // Muted playback is reliable before browser audio consent. The requested
+    // audio state remains on and is restored on the first click/tap/key press.
+    horrorVideo.muted = true;
+    horrorVideo.volume = 0;
+    updateHorrorAudioButton();
+  }
+
+  const playShowcaseVideo = video => {
+    if (video === horrorVideo) {
+      const canPlayAudio = horrorAudioEnabled && pageHasAudioConsent;
+      video.muted = !canPlayAudio;
+      horrorAudioNeedsUnlock = horrorAudioEnabled && !canPlayAudio;
+    }
+
+    const playback = video.play();
+    setPortfolioMediaActive(video, true);
+    if (video !== horrorVideo || !playback) {
+      playback?.catch(() => setPortfolioMediaActive(video, false));
+      return;
+    }
+
+    playback.catch(() => {
+      // Browsers can reject unmuted autoplay until the first click/key press.
+      // Keep motion playing muted, then restore the requested audio on interaction.
+      if (!horrorAudioEnabled) return;
+      horrorAudioNeedsUnlock = true;
+      video.muted = true;
+      video.play().catch(() => setPortfolioMediaActive(video, false));
+    });
+  };
+
   if ("IntersectionObserver" in window) {
     const videoObserver = new IntersectionObserver(entries => {
       entries.forEach(entry => {
         const video = entry.target;
-        const visible = entry.isIntersecting && entry.intersectionRatio >= 0.18;
+        const visibilityFloor = video === horrorVideo ? 0.01 : 0.18;
+        const visible = entry.isIntersecting && entry.intersectionRatio >= visibilityFloor;
         video.dataset.visible = String(visible);
         if (visible) {
           loadShowcaseVideo(video);
-          if (!prefersReducedMotion) video.play().catch(() => {});
-        } else video.pause();
+          if (video === horrorVideo) {
+            const canPlayAudio = horrorAudioEnabled && pageHasAudioConsent;
+            video.muted = !canPlayAudio;
+            horrorAudioNeedsUnlock = horrorAudioEnabled && !canPlayAudio;
+            syncHorrorAudioVolume();
+          }
+          if (!prefersReducedMotion) playShowcaseVideo(video);
+        } else {
+          if (video === horrorVideo) {
+            video.volume = 0;
+            horrorAudioButton?.style.setProperty("--audio-level", 0);
+          }
+          video.pause();
+        }
       });
-    }, { threshold: [0, 0.18, 0.45] });
+    }, { threshold: [0, 0.01, 0.18, 0.45] });
     showcaseVideos.forEach(video => videoObserver.observe(video));
   } else {
-    showcaseVideos.forEach(video => loadShowcaseVideo(video));
+    showcaseVideos.forEach(video => {
+      video.dataset.visible = "true";
+      loadShowcaseVideo(video);
+      if (!prefersReducedMotion) playShowcaseVideo(video);
+    });
   }
 
   document.addEventListener("visibilitychange", () => {
     showcaseVideos.forEach(video => {
       if (document.hidden) video.pause();
-      else if (video.dataset.visible === "true" && !prefersReducedMotion) video.play().catch(() => {});
+      else if (video.dataset.visible === "true" && !prefersReducedMotion) playShowcaseVideo(video);
     });
   });
 
   horrorAudioButton?.addEventListener("click", () => {
     if (!horrorVideo) return;
     loadShowcaseVideo(horrorVideo);
-    const enableAudio = horrorVideo.muted;
-    horrorVideo.muted = !enableAudio;
-    horrorVideo.volume = 0.55;
-    horrorAudioButton.classList.toggle("is-audible", enableAudio);
-    horrorAudioButton.setAttribute("aria-pressed", String(enableAudio));
-    horrorAudioButton.setAttribute("aria-label", enableAudio ? "Mute horror UI demo audio" : "Enable horror UI demo audio");
-    const label = horrorAudioButton.querySelector("span");
-    if (label) label.textContent = enableAudio ? "Audio on" : "Audio off";
-    if (enableAudio) horrorVideo.play().catch(() => {});
+
+    // If the browser was waiting for a gesture, this click enables sound
+    // directly. It no longer forces an off-then-on double toggle.
+    if (horrorAudioEnabled && (horrorAudioNeedsUnlock || horrorVideo.muted)) {
+      pageHasAudioConsent = true;
+      horrorAudioNeedsUnlock = false;
+      horrorVideo.muted = false;
+      syncHorrorAudioVolume();
+      updateHorrorAudioButton();
+      playShowcaseVideo(horrorVideo);
+      return;
+    }
+
+    horrorAudioEnabled = !horrorAudioEnabled;
+    horrorAudioNeedsUnlock = false;
+    horrorVideo.muted = !horrorAudioEnabled;
+    syncHorrorAudioVolume();
+    updateHorrorAudioButton();
+    if (horrorAudioEnabled) playShowcaseVideo(horrorVideo);
   });
+
+  const unlockHorrorAudio = () => {
+    if (!horrorVideo || !horrorAudioEnabled || horrorVideo.dataset.visible !== "true") return;
+    horrorAudioNeedsUnlock = false;
+    horrorVideo.muted = false;
+    syncHorrorAudioVolume();
+    playShowcaseVideo(horrorVideo);
+  };
+  document.addEventListener("siffy:audio-gesture", unlockHorrorAudio);
+  window.addEventListener("resize", syncHorrorAudioVolume, { passive: true });
 
   /* ---------- Mobile navigation ---------- */
   const closeMenu = () => {
@@ -215,6 +657,7 @@
         item.style.translate = `0 ${(window.innerHeight / 2 - rect.top) * speed}px`;
       });
     }
+    syncHorrorAudioVolume();
     ticking = false;
   };
 
